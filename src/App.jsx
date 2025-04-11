@@ -114,7 +114,7 @@ function App() {
   return (
     <div className="container">
       <h1>USB Label Print Demo</h1>
-      <button className="print-button" onClick={handlePrint}>
+      <button className="print-button" onClick={handlePrint} style={{ backgroundColor: '#3085d6', color: 'white', padding: '10px 20px', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
         Print via USB
       </button>
     </div>

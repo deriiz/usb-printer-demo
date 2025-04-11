@@ -95,18 +95,19 @@ function App() {
 
       Swal.fire({
         icon: 'success',
-        title: 'Berhasil!',
-        text: 'Label berhasil dikirim ke printer via USB.',
-        confirmButtonColor: '#3085d6',
+        title: 'Success',
+        text: 'Label has been successfully sent to the USB printer.',
+        timer: 2000,
+        showConfirmButton: false
       });
-    } catch (error) {
-      console.error(error);
-      Swal.fire({
-        icon: 'error',
-        title: 'Gagal!',
-        text: 'Gagal mengirim ke printer. Cek koneksi & izin USB.',
-        confirmButtonColor: '#d33',
-      });
+      } catch (error) {
+        console.error(error);
+        Swal.fire({
+          icon: 'error',
+          title: 'Failed',
+          text: 'Failed to send to printer. Check USB connection & permissions.',
+          confirmButtonColor: '#d33',
+        });
     }
   };
 
@@ -114,7 +115,7 @@ function App() {
     <div className="container">
       <h1>USB Label Print Demo</h1>
       <button className="print-button" onClick={handlePrint}>
-        Print ZPL via USB
+        Print via USB
       </button>
     </div>
   );

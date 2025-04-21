@@ -124,7 +124,7 @@ function App() {
 
   const sendToPrinter = async (device, zpl) => {
     let retryCount = 0;
-    const maxRetries = 3;
+    const maxRetries = 5; // Menambah jumlah retry untuk HP
     
     while (retryCount < maxRetries) {
       let deviceWasReopened = false;
@@ -134,6 +134,9 @@ function App() {
         if (device.opened) {
           await device.close();
         }
+        
+        // Tunggu sebentar sebelum membuka koneksi
+        await new Promise(resolve => setTimeout(resolve, 300));
         
         await device.open();
         
@@ -155,7 +158,7 @@ function App() {
           // Try resetting the device and reopening
           if (isMobileDevice()) {
             await device.close();
-            await new Promise(resolve => setTimeout(resolve, 500)); // Small delay
+            await new Promise(resolve => setTimeout(resolve, 800)); // Tambah delay untuk HP
             
             // Try reopening with a different approach for mobile
             await device.open();
@@ -171,6 +174,9 @@ function App() {
                 // Ignore errors here, might not be claimed
               }
             }
+            
+            // Tunggu sebentar lagi untuk HP
+            await new Promise(resolve => setTimeout(resolve, 300));
             
             // Now try claiming our interface again
             await device.claimInterface(endpointInfo.interfaceNumber);
@@ -221,12 +227,67 @@ function App() {
             await new Promise(resolve => setTimeout(resolve, chunkDelay));
           }
         }
-        // For mobile devices
+        // For Android mobile devices
+        else if (getOSType() === "Android" && isMobileDevice()) {
+          // Use much smaller chunks on Android phones (128 bytes)
+          const chunkSize = 128;
+          // Add much longer delays between chunks
+          const chunkDelay = 400; // ms
+          
+          // Tambahkan initialization sequence untuk printer
+          if (isPrinterZebra) {
+            // Reset command untuk Zebra
+            const initCmd = new Uint8Array([0x1B, 0x40]); // ESC @ command (reset)
+            await device.transferOut(endpointInfo.endpointNumber, initCmd);
+            await new Promise(resolve => setTimeout(resolve, 500)); // Tunggu setelah reset
+          }
+          
+          for (let i = 0; i < data.length; i += chunkSize) {
+            const chunk = data.slice(i, i + chunkSize);
+            console.log(`Sending chunk ${Math.floor(i/chunkSize) + 1} of ${Math.ceil(data.length/chunkSize)}`);
+            
+            // Coba kirim chunk dengan retry internal
+            let chunkRetry = 0;
+            let chunkSuccess = false;
+            
+            while (chunkRetry < 3 && !chunkSuccess) {
+              try {
+                result = await device.transferOut(endpointInfo.endpointNumber, chunk);
+                
+                if (result.status === 'ok') {
+                  chunkSuccess = true;
+                } else {
+                  throw new Error(`Chunk status: ${result.status}`);
+                }
+              } catch (chunkError) {
+                chunkRetry++;
+                console.warn(`Gagal kirim chunk, retry ${chunkRetry}/3: ${chunkError.message}`);
+                await new Promise(resolve => setTimeout(resolve, 200)); // Tunggu sebelum retry
+              }
+            }
+            
+            if (!chunkSuccess) {
+              throw new Error(`Transfer gagal pada chunk ${Math.floor(i/chunkSize) + 1} setelah 3x retry`);
+            }
+            
+            // Longer delay between chunks for Android
+            await new Promise(resolve => setTimeout(resolve, chunkDelay));
+            
+            // Setiap 5 chunk, tambah delay lebih lama untuk let printer catch up
+            if ((Math.floor(i/chunkSize) + 1) % 5 === 0) {
+              await new Promise(resolve => setTimeout(resolve, 800));
+            }
+          }
+          
+          // Final delay to ensure all data is processed
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        // For other mobile devices (iOS, etc)
         else if (isMobileDevice()) {
-          // Use even smaller chunks on mobile (512 bytes)
-          const chunkSize = 512;
+          // Use even smaller chunks on mobile (256 bytes)
+          const chunkSize = 256;
           // Add longer delays between chunks
-          const chunkDelay = 200; // ms
+          const chunkDelay = 300; // ms
           
           for (let i = 0; i < data.length; i += chunkSize) {
             const chunk = data.slice(i, i + chunkSize);
@@ -268,9 +329,18 @@ function App() {
           throw error;
         }
         
-        // Wait before retry
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        await resetDevice(device);
+        // Wait longer before retry on Android
+        const retryDelay = isMobileDevice() && getOSType() === "Android" ? 2000 : 1000;
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        
+        // Reset device more aggressively on Android
+        if (isMobileDevice() && getOSType() === "Android") {
+          console.log("Melakukan reset perangkat HP Android...");
+          await resetDevice(device);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } else {
+          await resetDevice(device);
+        }
       } finally {
         try {
           // Ensure we release the interface before closing
@@ -329,6 +399,11 @@ function App() {
           
           const device = await navigator.usb.requestDevice({ filters });
           deviceToPrint = device;
+          
+          // Cek apakah printer butuh driver dan tampilkan informasi
+          if (isPrinterNeedsDriver(device)) {
+            showDriverInstallHelp(device);
+          }
         } catch (requestError) {
           if (requestError.name === 'NotFoundError') {
             throw new Error('Tidak ada printer yang dipilih. Silakan pilih printer pada dialog.');
@@ -368,6 +443,9 @@ function App() {
         }
       }
       
+      // Deteksi apakah di HP Android
+      const isAndroidPhone = getOSType() === "Android" && isMobileDevice();
+      
       // Sample ZPL code for test print
       const zpl = `^XA^FO50,50^ADN,36,20^FDTest Print via USB^FS^XZ`;
       
@@ -376,7 +454,7 @@ function App() {
       if (isMobileDevice()) {
         loadingNotification = Swal.fire({
           title: 'Mengirim ke printer...',
-          text: 'Mohon tunggu',
+          text: isAndroidPhone ? 'Mohon tunggu, ini bisa memakan waktu lebih lama di HP Android' : 'Mohon tunggu',
           allowOutsideClick: false,
           allowEscapeKey: false,
           didOpen: () => {
@@ -410,12 +488,34 @@ function App() {
       console.error("Printing error:", error);
       setLastError(`${error.message || 'Terjadi kesalahan tidak diketahui'}`);
       
-      Swal.fire({
-        icon: 'error',
-        title: 'Gagal Mencetak',
-        text: `Error: ${error.message || 'Terjadi kesalahan tidak diketahui'}`,
-        confirmButtonColor: '#d33',
-      });
+      // Tampilkan pesan error yang lebih informatif untuk HP Android
+      if (getOSType() === "Android" && isMobileDevice()) {
+        Swal.fire({
+          icon: 'error',
+          title: 'Gagal Mencetak',
+          html: `
+            <p>Error: ${error.message || 'Terjadi kesalahan tidak diketahui'}</p>
+            <div style="text-align:left; margin-top:15px;">
+              <p><strong>Tips untuk HP Android:</strong></p>
+              <ul>
+                <li>Pastikan kabel OTG terpasang dengan baik</li>
+                <li>Coba cabut dan colok kembali printer</li>
+                <li>Pastikan printer dalam keadaan menyala</li>
+                <li>Izinkan akses USB saat diminta</li>
+                <li>Gunakan browser Chrome terbaru</li>
+              </ul>
+            </div>
+          `,
+          confirmButtonColor: '#d33',
+        });
+      } else {
+        Swal.fire({
+          icon: 'error',
+          title: 'Gagal Mencetak',
+          text: `Error: ${error.message || 'Terjadi kesalahan tidak diketahui'}`,
+          confirmButtonColor: '#d33',
+        });
+      }
     } finally {
       setIsLoading(false);
     }
@@ -453,30 +553,126 @@ function App() {
     }
   }, []);
 
+  // Helper untuk mendeteksi apakah printer butuh driver tambahan
+  const isPrinterNeedsDriver = (device) => {
+    // Periksa jenis printer berdasarkan IDs
+    if (device.vendorId === PRINTERS.ZEBRA.vendorId || 
+        device.vendorId === PRINTERS.ZEBRA_ALT.vendorId) {
+      return true; // Zebra printer biasanya butuh driver asli
+    }
+    return false;
+  };
+
+  // Fungsi untuk tampilkan bantuan instalasi driver jika dibutuhkan
+  const showDriverInstallHelp = (device) => {
+    let driverMessage = '';
+    
+    if (device.vendorId === PRINTERS.ZEBRA.vendorId || 
+        device.vendorId === PRINTERS.ZEBRA_ALT.vendorId) {
+      driverMessage = `
+        <p>Printer Zebra terdeteksi. Untuk penggunaan optimal:</p>
+        <ul>
+          <li>Windows: Install <a href="https://www.zebra.com/us/en/support-downloads/printer-software/printer-drivers.html" target="_blank">Zebra Driver</a></li>
+          <li>Android: Download aplikasi Zebra Utilities dari Play Store</li>
+        </ul>
+      `;
+    } else if (device.vendorId === PRINTERS.BEEPRT.vendorId) {
+      driverMessage = `
+        <p>Printer Beeprt/Kassen terdeteksi:</p>
+        <ul>
+          <li>Windows: Install driver dari CD atau website resmi</li>
+          <li>Android: Pastikan kabel OTG dan printer dalam kondisi baik</li>
+        </ul>
+      `;
+    }
+    
+    if (driverMessage) {
+      Swal.fire({
+        title: 'Informasi Driver Printer',
+        html: driverMessage,
+        icon: 'info',
+        confirmButtonText: 'Mengerti'
+      });
+    }
+  };
+
   return (
     <div className="container">
       <h1>USB Printer Demo</h1>
       
-      <button
-        className="print-button"
-        onClick={handlePrint}
-        disabled={isLoading || !navigator.usb}
-        style={{
-          backgroundColor: '#3085d6',
-          color: 'white',
-          padding: '15px 30px',
-          fontSize: '18px',
-          border: 'none',
-          borderRadius: '5px',
-          cursor: (isLoading || !navigator.usb) ? 'not-allowed' : 'pointer',
-          opacity: (isLoading || !navigator.usb) ? 0.7 : 1,
-          boxShadow: '0 2px 5px rgba(0, 0, 0, 0.2)',
-          display: 'block',
-          margin: '20px auto'
-        }}
-      >
-        {isLoading ? 'Sedang Mencetak...' : 'Print via USB'}
-      </button>
+      <div style={{ position: 'relative' }}>
+        <button
+          className="print-button"
+          onClick={handlePrint}
+          disabled={isLoading || !navigator.usb}
+          style={{
+            backgroundColor: '#3085d6',
+            color: 'white',
+            padding: '15px 30px',
+            fontSize: '18px',
+            border: 'none',
+            borderRadius: '5px',
+            cursor: (isLoading || !navigator.usb) ? 'not-allowed' : 'pointer',
+            opacity: (isLoading || !navigator.usb) ? 0.7 : 1,
+            boxShadow: '0 2px 5px rgba(0, 0, 0, 0.2)',
+            display: 'block',
+            margin: '20px auto'
+          }}
+        >
+          {isLoading ? 'Sedang Mencetak...' : 'Print via USB'}
+        </button>
+        
+        <button
+          onClick={() => {
+            Swal.fire({
+              title: 'Bantuan Printing',
+              html: `
+                <div style="text-align:left;">
+                  <p><strong>Tips untuk berbagai perangkat:</strong></p>
+                  <p><u>HP Android:</u></p>
+                  <ul>
+                    <li>Gunakan browser Chrome terbaru</li>
+                    <li>Pastikan kabel OTG terpasang dengan benar</li>
+                    <li>Izinkan akses USB saat diminta</li>
+                    <li>Proses print mungkin lebih lambat, harap bersabar</li>
+                  </ul>
+                  <p><u>Laptop/PC:</u></p>
+                  <ul>
+                    <li>Install driver printer yang sesuai</li>
+                    <li>Gunakan browser Chrome terbaru</li>
+                    <li>Untuk printer Zebra: <a href="https://www.zebra.com/us/en/support-downloads/printer-software/printer-drivers.html" target="_blank">Download driver di sini</a></li>
+                  </ul>
+                  <p><u>Tablet:</u></p>
+                  <ul>
+                    <li>Gunakan browser Chrome terbaru</li>
+                    <li>Pastikan tablet mendukung USB OTG</li>
+                  </ul>
+                </div>
+              `,
+              icon: 'info',
+              confirmButtonText: 'Mengerti'
+            });
+          }}
+          style={{
+            position: 'absolute',
+            right: '0',
+            top: '20px',
+            backgroundColor: '#6c757d',
+            color: 'white',
+            width: '30px',
+            height: '30px',
+            borderRadius: '50%',
+            border: 'none',
+            fontSize: '14px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+        >
+          ?
+        </button>
+      </div>
       
       {lastError && (
         <div className="error-message" style={{ 

@@ -73,48 +73,135 @@
 
 // export default App;
 
+// import Swal from 'sweetalert2';
+// import './App.css';
+
+// function App() {
+//   const handlePrint = async () => {
+//     try {
+//       const device = await navigator.usb.requestDevice({ filters: [] });
+
+//       await device.open();
+//       if (device.configuration === null) {
+//         await device.selectConfiguration(1);
+//       }
+//       await device.claimInterface(0);
+
+//       const zpl = `^XA^FO50,50^ADN,36,20^FDTest Print via USB^FS^XZ`;
+//       const encoder = new TextEncoder();
+//       const data = encoder.encode(zpl);
+
+//       await device.transferOut(1, data);
+
+//       Swal.fire({
+//         icon: 'success',
+//         title: 'Success',
+//         text: 'Label has been successfully sent to the USB printer.',
+//         timer: 2000,
+//         showConfirmButton: false
+//       });
+//       } catch (error) {
+//         console.error(error);
+//         Swal.fire({
+//           icon: 'error',
+//           title: 'Failed',
+//           text: 'Failed to send to printer. Check USB connection & permissions.',
+//           confirmButtonColor: '#d33',
+//         });
+//     }
+//   };
+
+//   return (
+//     <div className="container">
+//       <h1>USB Label Print Demo</h1>
+//       <button className="print-button" onClick={handlePrint} style={{ backgroundColor: '#3085d6', color: 'white', padding: '10px 20px', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
+//         Print via USB
+//       </button>
+//     </div>
+//   );
+// }
+
+// export default App;
+
+
 import Swal from 'sweetalert2';
 import './App.css';
 
 function App() {
   const handlePrint = async () => {
     try {
-      const device = await navigator.usb.requestDevice({ filters: [] });
+      const device = await navigator.usb.requestDevice({
+        filters: [{ vendorId: 0x09C6 }] // Beeprt, Kassen, Zebra clone
+      });
 
       await device.open();
+
       if (device.configuration === null) {
         await device.selectConfiguration(1);
       }
-      await device.claimInterface(0);
+
+      // Temukan interface dengan endpoint OUT
+      const outInterface = device.configuration.interfaces.find(iface =>
+        iface.alternate.endpoints.some(ep => ep.direction === 'out')
+      );
+
+      if (!outInterface) {
+        throw new Error('Tidak ada interface dengan endpoint OUT ditemukan.');
+      }
+
+      const interfaceNumber = outInterface.interfaceNumber;
+      await device.claimInterface(interfaceNumber);
+
+      const endpointOut = outInterface.alternate.endpoints.find(ep => ep.direction === 'out');
+
+      if (!endpointOut) {
+        throw new Error('Tidak menemukan endpoint OUT.');
+      }
 
       const zpl = `^XA^FO50,50^ADN,36,20^FDTest Print via USB^FS^XZ`;
       const encoder = new TextEncoder();
       const data = encoder.encode(zpl);
 
-      await device.transferOut(1, data);
+      const result = await device.transferOut(endpointOut.endpointNumber, data);
 
-      Swal.fire({
-        icon: 'success',
-        title: 'Success',
-        text: 'Label has been successfully sent to the USB printer.',
-        timer: 2000,
-        showConfirmButton: false
-      });
-      } catch (error) {
-        console.error(error);
+      if (result.status === 'ok') {
         Swal.fire({
-          icon: 'error',
-          title: 'Failed',
-          text: 'Failed to send to printer. Check USB connection & permissions.',
-          confirmButtonColor: '#d33',
+          icon: 'success',
+          title: 'Success',
+          text: 'Label has been successfully sent to the USB printer.',
+          timer: 2000,
+          showConfirmButton: false
         });
+      } else {
+        throw new Error(`Transfer failed. Status: ${result.status}`);
+      }
+
+    } catch (error) {
+      console.error(error);
+      Swal.fire({
+        icon: 'error',
+        title: 'Failed',
+        text: 'Failed to send to printer. Check USB connection & permissions.',
+        confirmButtonColor: '#d33',
+      });
     }
   };
 
   return (
     <div className="container">
       <h1>USB Label Print Demo</h1>
-      <button className="print-button" onClick={handlePrint} style={{ backgroundColor: '#3085d6', color: 'white', padding: '10px 20px', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
+      <button
+        className="print-button"
+        onClick={handlePrint}
+        style={{
+          backgroundColor: '#3085d6',
+          color: 'white',
+          padding: '10px 20px',
+          border: 'none',
+          borderRadius: '5px',
+          cursor: 'pointer'
+        }}
+      >
         Print via USB
       </button>
     </div>
@@ -122,5 +209,6 @@ function App() {
 }
 
 export default App;
+
 
 
